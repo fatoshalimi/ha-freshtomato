@@ -9,11 +9,17 @@ Cycle (every scan_interval seconds):
   Call 2 – POST /update.cgi  exec=netdev
       → netdev (per-interface byte counters)
 
+  Call 3 – POST /update.cgi  exec=etherstates
+      → physical Ethernet port link states
+
+  Call 4 – GET /status-data.jsx
+      → CPU/RAM sysinfo; reused for wlstats/NVRAM parsing on refresh cycles
+
 Every NVRAM_REFRESH_INTERVAL cycles (~5 min):
-  Call 3 – POST /update.cgi  exec=nvram  (or GET status-overview.asp fallback)
+  Call 5 – POST /update.cgi  exec=nvram
       → firmware, model, SSID, radio state, WAN proto, LAN IP, etc.
 
-Total: 2 calls/cycle + 1 call every ~5 min.
+Total: 4 calls/cycle + one NVRAM call and occasional about.asp fallback.
 
 Wireless client / repeater mode:
   When the router operates as a wireless client (no WAN IP, DHCP server
@@ -31,7 +37,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import CannotConnect, FreshTomatoAPI, InvalidAuth, RouterData, WanConnection
+from .api import (
+    CannotConnect,
+    FreshTomatoAPI,
+    InvalidAuth,
+    RouterData,
+    WanConnection,
+    calculate_cpu_usage,
+)
 from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -79,6 +92,7 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
         # Updated every nvram refresh cycle (cycle 1 + every NVRAM_REFRESH_INTERVAL).
         # {unit_index: True=on, False=off}
         self._wl_hw_radio: dict[int, bool] = {}
+        self._previous_cpu_jiffies: tuple[int, int] | None = None
         # Per-unit cooldown: monotonic timestamp after which the next Interface
         # toggle is allowed.  Set by the Interface switch after each successful
         # SSH command.  Radio switch does not use cooldown.
@@ -137,10 +151,39 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
             # this router does not embed etherstates in the devlist response.
             etherstates = await self.api.fetch_etherstates()
             _parse_etherstates_dict(etherstates, data)
-            _parse_netdev(netdev_raw, data)
+
+            # System telemetry is optional: a malformed/unavailable status page
+            # must not discard the successfully fetched network data.
+            status_text: str | None = None
+            try:
+                status_text = await self.api.fetch_status_data_text()
+                data.system = self.api.parse_system_stats(status_text)
+                current = None
+                if (
+                    data.system.cpu_total_jiffies is not None
+                    and data.system.cpu_idle_jiffies is not None
+                ):
+                    current = (
+                        data.system.cpu_total_jiffies,
+                        data.system.cpu_idle_jiffies,
+                    )
+                data.system.cpu_usage_percent = calculate_cpu_usage(
+                    self._previous_cpu_jiffies, current
+                )
+                if current is not None:
+                    if (
+                        self._previous_cpu_jiffies is not None
+                        and data.system.cpu_usage_percent is None
+                    ):
+                        _LOGGER.debug(
+                            "CPU jiffies reset or invalid delta; resetting baseline"
+                        )
+                    self._previous_cpu_jiffies = current
+            except (CannotConnect, InvalidAuth, ValueError, TypeError) as err:
+                _LOGGER.debug("Optional system telemetry unavailable: %s", err)
 
             if self._cycle_count == 1 or (self._cycle_count % NVRAM_REFRESH_INTERVAL == 0):
-                await self._refresh_nvram()
+                await self._refresh_nvram(status_text)
 
             # Decrement the per-key guard counters; remove expired ones.
             # Guards are set to _PENDING_GUARD_CYCLES by switch entities and
@@ -214,7 +257,7 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
             host, port, username, password
         )
 
-    async def _refresh_nvram(self) -> None:
+    async def _refresh_nvram(self, status_text: str | None = None) -> None:
         if self._nvram_supported is not False:
             try:
                 result = await self.api.fetch_nvram(NVRAM_VARS)
@@ -227,19 +270,24 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
                 self._nvram_supported = False
 
         try:
-            nvram_result, wl_hw_radio = await self.api.fetch_nvram_from_asp(NVRAM_VARS)
+            nvram_result, wl_hw_radio = await self.api.fetch_nvram_from_asp(
+                NVRAM_VARS, status_text
+            )
             if nvram_result:
                 self._safe_nvram_update(nvram_result)
                 if self._nvram_supported is None:
                     self._nvram_supported = False  # exec=nvram not used
             if wl_hw_radio:
                 self._wl_hw_radio.update(wl_hw_radio)
-        except CannotConnect as err:
+        except (CannotConnect, InvalidAuth) as err:
             _LOGGER.warning("NVRAM ASP fallback failed: %s", err)
 
         # Firmware version is not exposed via exec=nvram on all builds.
         # Fall back to parsing it from the about.asp / status-overview.asp HTML.
-        if not any(k in self._nvram_cache for k in ("t_build_time", "os_version", "tomato_version")):
+        if not any(
+            k in self._nvram_cache
+            for k in ("t_build_time", "os_version", "tomato_version")
+        ):
             fw = await self.api.fetch_about_page()
             _LOGGER.debug("fetch_about_page returned: %r", fw)
             if fw:

@@ -35,6 +35,12 @@ A Home Assistant custom integration for routers running [FreshTomato](https://fr
 | **br1 IP Address** | IP of the secondary/uplink bridge, if present |
 | **Firmware Version** | FreshTomato build version (e.g. `FreshTomato 2026.1`) |
 | **Router Model** | Hardware model string from nvram |
+| **CPU Load 1 min** | Linux one-minute load average (dimensionless) |
+| **CPU Usage** | CPU utilization calculated from consecutive FreshTomato jiffies samples |
+| **Available Memory** | FreshTomato available/free RAM in bytes |
+| **Used Memory** | Total RAM minus available RAM in bytes *(disabled by default)* |
+| **Total Memory** | Installed/usable RAM in bytes *(disabled by default)* |
+| **Memory Usage** | Used RAM as a percentage |
 | **Total Connected Devices** | Combined unique wireless + wired client count |
 | **Wireless Connected Devices** | Active wireless clients |
 | **Wired Connected Devices** | Clients with active DHCP leases |
@@ -129,6 +135,16 @@ When WAN protocol is `disabled` (Wireless Ethernet Bridge or pure AP mode), **WA
 
 ### Physical Ethernet ports
 Port entities (WAN, LAN0–LAN3) are created dynamically on the first poll. Each shows link state as a human-readable string including speed and duplex — for example `1 Gbps, Full Duplex` or `Disconnected`. Ports reported as `disabled` by the firmware are not created. The binary sensor companion entity for each port shows raw link up/down state.
+
+### CPU and memory telemetry
+System telemetry is read locally from FreshTomato's raw `sysinfo` data in
+`status-data.jsx`; it requires neither SSH nor a cloud service. **CPU Load** is
+Linux load average and is not a percentage (a load of `1.0` does not necessarily
+mean 100% utilization, especially on multi-core routers). **CPU Usage** is the
+separate percentage derived from changes in the router's total and idle jiffies.
+The first usage sample after an integration reload is unavailable while a
+baseline is established. The optional 5- and 15-minute load sensors are disabled
+by default.
 
 ### Finding the HTTP ID
 In FreshTomato navigate to `Administration → Admin Access`. The **Web Admin ID** field contains a token like `TIDxxxxxxxxxxxxxxxx`. This is required for every API call and cannot be omitted.

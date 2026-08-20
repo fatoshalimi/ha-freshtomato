@@ -3,6 +3,8 @@
 Sensors provided (all from a single coordinator data snapshot):
 ──────────────────────────────────────────────────────────────────
 Router / System
+  • CPU load averages and jiffies-based CPU usage
+  • Available, used, total, and percentage memory
   • WAN IP Address          (per WAN – dynamically created)
   • WAN Gateway             (per WAN)
   • WAN Connection Type     (per WAN)
@@ -45,6 +47,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfDataRate,
     UnitOfInformation,
@@ -159,6 +162,73 @@ def _make_wan_sensor_descs(
     )
 
 SYSTEM_SENSORS: tuple[FreshTomatoSensorDescription, ...] = (
+    FreshTomatoSensorDescription(
+        key="cpu_load_1m",
+        name="CPU Load 1 min",
+        icon="mdi:cpu-64-bit",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.system.load_1m,
+    ),
+    FreshTomatoSensorDescription(
+        key="cpu_load_5m",
+        name="CPU Load 5 min",
+        icon="mdi:cpu-64-bit",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: d.system.load_5m,
+    ),
+    FreshTomatoSensorDescription(
+        key="cpu_load_15m",
+        name="CPU Load 15 min",
+        icon="mdi:cpu-64-bit",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: d.system.load_15m,
+    ),
+    FreshTomatoSensorDescription(
+        key="cpu_usage",
+        name="CPU Usage",
+        icon="mdi:cpu-64-bit",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.system.cpu_usage_percent,
+    ),
+    FreshTomatoSensorDescription(
+        key="memory_available",
+        name="Available Memory",
+        icon="mdi:memory",
+        native_unit_of_measurement=UnitOfInformation.BYTES,
+        device_class=SensorDeviceClass.DATA_SIZE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.system.memory_available,
+    ),
+    FreshTomatoSensorDescription(
+        key="memory_used",
+        name="Used Memory",
+        icon="mdi:memory",
+        native_unit_of_measurement=UnitOfInformation.BYTES,
+        device_class=SensorDeviceClass.DATA_SIZE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: d.system.memory_used,
+    ),
+    FreshTomatoSensorDescription(
+        key="memory_total",
+        name="Total Memory",
+        icon="mdi:memory",
+        native_unit_of_measurement=UnitOfInformation.BYTES,
+        device_class=SensorDeviceClass.DATA_SIZE,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: d.system.memory_total,
+    ),
+    FreshTomatoSensorDescription(
+        key="memory_usage",
+        name="Memory Usage",
+        icon="mdi:memory",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.system.memory_usage_percent,
+    ),
     FreshTomatoSensorDescription(
         key="default_gateway",
         name="Router Default Gateway",
