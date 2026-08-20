@@ -67,6 +67,18 @@ def test_jiffies_usage_and_first_sample() -> None:
     assert api.calculate_cpu_usage((1000, 700), (1100, 750)) == 50.0
 
 
+def test_jiffies_io_wait_is_treated_as_idle() -> None:
+    previous = api.parse_sysinfo({"jiffies": "100 0 0 700 100"})
+    current = api.parse_sysinfo({"jiffies": "110 0 0 730 160"})
+
+    assert (previous.cpu_total_jiffies, previous.cpu_idle_jiffies) == (900, 800)
+    assert (current.cpu_total_jiffies, current.cpu_idle_jiffies) == (1000, 890)
+    assert api.calculate_cpu_usage(
+        (previous.cpu_total_jiffies, previous.cpu_idle_jiffies),
+        (current.cpu_total_jiffies, current.cpu_idle_jiffies),
+    ) == 10.0
+
+
 def test_jiffies_reset_replaces_baseline_for_next_calculation() -> None:
     assert api.calculate_cpu_usage((1100, 750), (100, 70)) is None
     assert api.calculate_cpu_usage((100, 70), (200, 120)) == 50.0

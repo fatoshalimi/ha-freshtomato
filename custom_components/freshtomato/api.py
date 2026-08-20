@@ -81,7 +81,9 @@ def parse_sysinfo(sysinfo: dict[str, Any]) -> "SystemStats":
             values.append(parsed)
     if len(values) >= 4:
         stats.cpu_total_jiffies = sum(values)
-        stats.cpu_idle_jiffies = values[3]
+        # Linux reports I/O wait immediately after idle in /proc/stat. Time
+        # waiting for I/O is not active CPU time, so include it when present.
+        stats.cpu_idle_jiffies = values[3] + (values[4] if len(values) >= 5 else 0)
     return stats
 
 
