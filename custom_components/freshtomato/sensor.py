@@ -374,7 +374,7 @@ async def async_setup_entry(
     _bridge_ifname  = nvram.get("lan1_ifname", "br1") or "br1"
     # bridge_iface is the physical/VLAN interface for bandwidth measurement
     # lan1_ifnames example: "vlan3 eth1" → use the first token
-    _bridge_bw_iface = (nvram.get("lan1_ifnames", "") or "").split()[0] or _bridge_ifname
+    _bridge_bw_iface = ((nvram.get("lan1_ifnames", "") or "").split() or [_bridge_ifname])[0]
 
     # ── WAN sensors (per-WAN for multi-WAN; legacy single for single-WAN) ──
     # mwan_num tells us how many WAN ports are configured; default is 1.
