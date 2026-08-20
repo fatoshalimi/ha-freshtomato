@@ -18,13 +18,12 @@ DEFAULT_USERNAME = "admin"
 # Coordinator update keys
 DATA_COORDINATOR = "coordinator"
 
-# update.cgi exec targets — ONE call fetches multiple data blobs at once
-# FreshTomato supports combining them with a single POST body using multiple
-# "exec" fields, but the safest/most compatible approach is two calls:
+# update.cgi exec targets are kept as separate calls for compatibility:
 #   1. exec=devlist  → wlnoise[], wldev[], dhcpd_lease[], arp[], active WAN stats
 #   2. exec=netdev   → real-time interface byte counters (tx/rx)
-# The status-overview ASP page also loads nvram vars once at page-load time.
-# We replicate that with a targeted nvram POST. Total: 3 HTTP calls per cycle.
+#   3. exec=etherstates → physical port states
+# Every cycle also GETs status-data.jsx for CPU/RAM. A targeted exec=nvram POST
+# is added only on periodic refresh cycles; that cycle reuses the status page.
 
 EXEC_DEVLIST = "devlist"
 EXEC_NETDEV = "netdev"

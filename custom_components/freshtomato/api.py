@@ -26,6 +26,78 @@ _UNQUOTED_KEY_REPL = r'"\1":'
 _HEX_INT_RE = re.compile(r'0x([0-9a-fA-F]+)')
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    """Return a non-negative integer without accepting booleans or fractions."""
+    if isinstance(value, bool):
+        return None
+    try:
+        converted = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    return converted if converted >= 0 else None
+
+
+def parse_sysinfo(sysinfo: dict[str, Any]) -> "SystemStats":
+    """Validate and normalize FreshTomato ARM sysinfo raw values."""
+    stats = SystemStats()
+    loads = sysinfo.get("loads")
+    if isinstance(loads, (list, tuple)):
+        converted: list[float | None] = []
+        for value in loads[:3]:
+            number = _nonnegative_int(value)
+            converted.append(
+                round(number / 65536.0, 2) if number is not None else None
+            )
+        converted.extend([None] * (3 - len(converted)))
+        stats.load_1m, stats.load_5m, stats.load_15m = converted
+
+    total = _nonnegative_int(sysinfo.get("totalram"))
+    available_raw = sysinfo.get("totalfreeram", sysinfo.get("freeram"))
+    available = _nonnegative_int(available_raw)
+    if total is not None and total > 0:
+        stats.memory_total = total
+        if available is not None and available <= total:
+            stats.memory_available = available
+            stats.memory_used = total - available
+            stats.memory_usage_percent = round(stats.memory_used / total * 100, 1)
+
+    jiffies = sysinfo.get("jiffies")
+    values: list[int] = []
+    if isinstance(jiffies, str):
+        for value in jiffies.split():
+            parsed = _nonnegative_int(value)
+            if parsed is None:
+                values = []
+                break
+            values.append(parsed)
+    elif isinstance(jiffies, (list, tuple)):
+        for value in jiffies:
+            parsed = _nonnegative_int(value)
+            if parsed is None:
+                values = []
+                break
+            values.append(parsed)
+    if len(values) >= 4:
+        stats.cpu_total_jiffies = sum(values)
+        stats.cpu_idle_jiffies = values[3]
+    return stats
+
+
+def calculate_cpu_usage(
+    previous: tuple[int, int] | None, current: tuple[int, int] | None
+) -> float | None:
+    """Calculate active CPU percent from consecutive (total, idle) counters."""
+    if previous is None or current is None:
+        return None
+    delta_total = current[0] - previous[0]
+    delta_idle = current[1] - previous[1]
+    if delta_total <= 0 or delta_idle < 0 or delta_idle > delta_total:
+        return None
+    return round(max(0.0, min(100.0, (delta_total - delta_idle) / delta_total * 100)), 1)
+
+
 @dataclass
 class WanConnection:
     """Holds per-WAN-interface data for multi-WAN configurations.
@@ -42,6 +114,23 @@ class WanConnection:
     dns:      str = ""
     uptime:   int = 0
     lease:    int = 0
+
+
+@dataclass
+class SystemStats:
+    """Validated system metrics read from FreshTomato's ``sysinfo`` object."""
+
+    load_1m: float | None = None
+    load_5m: float | None = None
+    load_15m: float | None = None
+    cpu_usage_percent: float | None = None
+    memory_total: int | None = None
+    memory_available: int | None = None
+    memory_used: int | None = None
+    memory_usage_percent: float | None = None
+    # Raw counters used by the coordinator to calculate usage between polls.
+    cpu_total_jiffies: int | None = None
+    cpu_idle_jiffies: int | None = None
 
 
 @dataclass
@@ -64,6 +153,7 @@ class RouterData:
     eth_ports:        dict[str, str] = field(default_factory=dict)
     # Multi-WAN: one WanConnection per active WAN; list index 0 == WAN1
     wan_connections:  list[WanConnection] = field(default_factory=list)
+    system:           SystemStats = field(default_factory=SystemStats)
 
 
 class FreshTomatoAPI:
@@ -214,7 +304,7 @@ class FreshTomatoAPI:
         return {}
 
     async def fetch_nvram_from_asp(
-        self, variables: list[str]
+        self, variables: list[str], status_text: str | None = None
     ) -> tuple[dict[str, str], dict[int, bool]]:
         """Scrape nvram and wlstats from status-data.jsx.
 
@@ -225,25 +315,11 @@ class FreshTomatoAPI:
             wl_hw_radio  – {unit_index: hw_radio_on} from wlstats[N].radio
                            radio field: 1 = RF on, 0 = RF off
         """
-        url     = f"{self._base_url}/status-data.jsx"
-        headers = {"Referer": f"{self._base_url}/status-overview.asp"}
-        _LOGGER.debug("GET %s  params=_http_id=***", url)
-        try:
-            async with self._session.get(
-                url, params={"_http_id": self._http_id}, headers=headers
-            ) as resp:
-                resp.raise_for_status()
-                text = await resp.text()
-                _LOGGER.debug(
-                    "GET %s  status=%d  response=\n%s",
-                    url, resp.status, text,
-                )
-        except aiohttp.ClientResponseError as err:
-            if err.status in (401, 403):
-                raise InvalidAuth from err
-            raise CannotConnect from err
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise CannotConnect from err
+        text = (
+            status_text
+            if status_text is not None
+            else await self.fetch_status_data_text()
+        )
 
         # Parse nvram object
         nvram_result: dict[str, str] = {}
@@ -284,6 +360,33 @@ class FreshTomatoAPI:
             _LOGGER.debug("wlstats hw_radio parsed (1=on, 0=off): %r", wl_hw_radio)
 
         return nvram_result, wl_hw_radio
+
+    async def fetch_status_data_text(self) -> str:
+        """Fetch the status page used for both telemetry and periodic ASP data."""
+        url = f"{self._base_url}/status-data.jsx"
+        headers = {"Referer": f"{self._base_url}/status-overview.asp"}
+        _LOGGER.debug("GET %s  params=_http_id=***", url)
+        try:
+            async with self._session.get(
+                url, params={"_http_id": self._http_id}, headers=headers
+            ) as resp:
+                resp.raise_for_status()
+                return await resp.text()
+        except aiohttp.ClientResponseError as err:
+            if err.status in (401, 403):
+                raise InvalidAuth(f"Auth failed with HTTP {err.status}") from err
+            raise CannotConnect(f"HTTP error {err.status}") from err
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            raise CannotConnect(f"Connection error: {err}") from err
+
+    def parse_system_stats(self, text: str) -> SystemStats:
+        """Parse raw ARM ``sysinfo`` values from a status page response."""
+        parsed = self._parse_js_vars(text)
+        sysinfo = parsed.get("sysinfo", {})
+        if not isinstance(sysinfo, dict):
+            _LOGGER.debug("status-data.jsx has no valid sysinfo object")
+            return SystemStats()
+        return parse_sysinfo(sysinfo)
 
     async def fetch_firmware_version(self) -> str | None:
         """Try exec=nvram for firmware build strings."""
