@@ -1,13 +1,13 @@
 {
   "domain": "freshtomato",
   "name": "FreshTomato Router",
-  "version": "2026.3.1",
+  "version": "2026.8.0",
   "config_flow": true,
-  "documentation": "https://github.com/mx5gr/ha-freshtomato",
-  "issue_tracker": "https://github.com/mx5gr/ha-freshtomato/issues",
+  "documentation": "https://github.com/fatoshalimi/ha-freshtomato",
+  "issue_tracker": "https://github.com/fatoshalimi/ha-freshtomato/issues",
   "requirements": ["asyncssh>=2.14.0"],
   "dependencies": [],
-  "codeowners": ["@mx5gr"],
+  "codeowners": ["@fatoshalimi"],
   "iot_class": "local_polling",
   "integration_type": "device"
 }
